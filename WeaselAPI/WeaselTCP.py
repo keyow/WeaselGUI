@@ -1,5 +1,7 @@
 from twisted.internet.protocol import Protocol, ClientFactory, ServerFactory
 from twisted.internet import reactor
+
+import WeaselAPI
 from WeaselAPI.proxy import Proxy
 import socket
 import struct
@@ -226,6 +228,7 @@ class WeaselProxy(Proxy):
 
     def __init__(self, bind_port, interface):
         super().__init__(bind_port, interface)
+        self.listener = None
         self.fakeCertificatesChain = None
         subprocess.call(['sudo', 'bash', './scripts/rules.sh'])
 
@@ -243,7 +246,8 @@ class WeaselProxy(Proxy):
         factory = TCPServerFactory(self.server_ip, self.server_port, protocol=TCPServerBridgeProto, proxy=self)
 
         # listening traffic on bind port
-        listener = reactor.listenTCP(self.bind_port, factory, interface=self.interface)
+        self.listener = reactor.listenTCP(self.bind_port, factory, interface=self.interface)
+        WeaselAPI.listening = True
 
         self.fakeCertificatesChain = fakeCertificateChain
 
@@ -271,6 +275,18 @@ class TCPServerBridgeProto(TCP):
             origin_dst = self.__destinationInfo()
             self.factory.server_ip = origin_dst[0]
             self.factory.server_port = origin_dst[1]
+            WeaselAPI.client_ip = self.ip_tuple[0][0]
+            WeaselAPI.client_port = int(self.ip_tuple[0][1])
+            WeaselAPI.server_ip = origin_dst[0]
+            WeaselAPI.server_port = int(origin_dst[1])
+
+            print(WeaselAPI.client_ip)
+            print(WeaselAPI.client_port)
+            print(WeaselAPI.server_ip)
+            print(WeaselAPI.server_port)
+
+            WeaselAPI.received = True
+
         logging.info("Client connection successful!")
         logging.debug(f"\n-----------------------------------\n"
                       f"Client:\n |\tIP address: {self.ip_tuple[0][0]}\n |\tPort: {self.ip_tuple[0][1]}\n"
@@ -378,6 +394,8 @@ class TCPClientBridgeProto(TCP):
         :param reason:
         :return: nothing
         """
+        self.factory.proxy.listener.stopListening()
+        WeaselAPI.listening = False
         logging.error(f"[{self.__class__.__name__}] Lose connection...")
 
 
