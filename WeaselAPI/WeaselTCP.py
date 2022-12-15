@@ -248,7 +248,7 @@ class WeaselProxy(Proxy):
         # listening traffic on bind port
         self.listener = reactor.listenTCP(self.bind_port, factory, interface=self.interface)
         WeaselAPI.listening = True
-
+        WeaselAPI.received = False
         self.fakeCertificatesChain = fakeCertificateChain
 
 

@@ -20,40 +20,41 @@ client_cer_raw = bytes()
 
 
 class ProcessClientServer(QObject):
-    finished = pyqtSignal()
+    received = pyqtSignal()
 
     def __init__(self):
         QObject.__init__(self)
-        self.continue_run = True
+        self.ready = True
 
     def do_work(self):
-        while self.continue_run:
+        while True:
+            QThread.sleep(1)
             if WeaselAPI.received:
-                global cur_client_ip, cur_client_port, cur_server_ip, cur_server_port
-                cur_client_ip, cur_client_port = WeaselAPI.client_ip, WeaselAPI.client_port
-                cur_server_ip, cur_server_port = WeaselAPI.server_ip, WeaselAPI.server_port
-                self.stop()
-        self.finished.emit()
-
-    def stop(self):
-        self.continue_run = False
+                if self.ready:
+                    print("Recieved")
+                    global cur_client_ip, cur_client_port, cur_server_ip, cur_server_port
+                    cur_client_ip, cur_client_port = WeaselAPI.client_ip, WeaselAPI.client_port
+                    cur_server_ip, cur_server_port = WeaselAPI.server_ip, WeaselAPI.server_port
+                    self.received.emit()
+                    self.ready = False
+            else:
+                if not WeaselAPI.received:
+                    self.ready = True
 
 
 class ProcessConnectionTerminated(QObject):
-    finished = pyqtSignal()
+    terminated = pyqtSignal()
 
     def __init__(self):
         QObject.__init__(self)
-        self.continue_run = True
+        self.state = True  # disconnected
 
     def do_work(self):
-        while self.continue_run:
-            if not WeaselAPI.listening:
-                self.stop()
-        self.finished.emit()
-
-    def stop(self):
-        self.continue_run = False
+        while True:
+            QThread.sleep(1)
+            if not WeaselAPI.listening and self.state:
+                self.terminated.emit()
+            self.state = WeaselAPI.listening
 
 
 class CertificateSelect(QtWidgets.QDialog):
@@ -131,19 +132,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processThread = QThread()
         self.worker = ProcessClientServer()
         self.worker.moveToThread(self.processThread)
-        self.worker.finished.connect(self.processThread.quit)
+        self.worker.received.connect(lambda: self.send("Client captured! See additional network data below"))
+        self.worker.received.connect(self.setClientServerData)
         self.processThread.started.connect(self.worker.do_work)
-        self.processThread.finished.connect(self.worker.stop)
-        self.processThread.finished.connect(self.setClientServerData)
+        self.processThread.start()
 
         self.connectionThread = QThread()
         self.connectionWorker = ProcessConnectionTerminated()
         self.connectionWorker.moveToThread(self.connectionThread)
-        self.connectionWorker.finished.connect(self.connectionThread.quit)
+        self.connectionWorker.terminated.connect(lambda: self.setStartActive())
+        self.connectionWorker.terminated.connect(lambda: self.setCertActive())
+        self.connectionWorker.terminated.connect(lambda: self.send("Connection is not active."))
         self.connectionThread.started.connect(self.connectionWorker.do_work)
-        self.connectionThread.finished.connect(self.connectionWorker.stop)
-        self.connectionThread.finished.connect(lambda: self.setStartActive(True))
-        self.connectionThread.finished.connect(lambda: self.send("Connection terminated. Logging finished!"))
+        self.connectionThread.start()
+
         loggingBrowser = QPlainTextEditLoggerHandler(self.ui.LoggingBrowser)
         logging.getLogger().addHandler(loggingBrowser)
         logging.getLogger().setLevel(logging.DEBUG)
@@ -153,13 +155,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def send(self, message):
         self.ui.MessageBrowser.appendPlainText(message)
 
-    def setStartActive(self, isactive):
-        self.ui.startProxy.setEnabled(isactive)
+    def setCertActive(self):
+        self.ui.loadCertificates.setEnabled(True)
+
+    def setStartActive(self):
+        self.ui.startProxy.setEnabled(True)
 
     def setupSignals(self):
         self.ui.loadCertificates.clicked.connect(self.selectCertificates)
         self.ui.startProxy.clicked.connect(self.startListening)
-        self.ui.startProxy.clicked.connect(self.processThread.start)
 
     def selectCertificates(self):
         print("Selecting certs")
@@ -168,9 +172,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def startListening(self):
         import WeaselAPI.WeaselTCP
         self.ui.startProxy.setEnabled(False)
+        self.ui.loadCertificates.setEnabled(False)
+
+        self.ui.LoggingBrowser.clear()
+        self.ui.MessageBrowser.clear()
+        self.ui.ClientInfo.clear()
+        self.ui.ServerInfo.clear()
+
         weaselProxy = WeaselAPI.WeaselTCP.WeaselProxy(bind_port=8080, interface="192.168.10.128")
         weaselProxy.start(WeaselAPI.certgen.CertificateChain(client_cer_raw, ca_cer_raw))
-        self.connectionThread.start()
+        print(f"LISTENING: {WeaselAPI.listening}")
         self.send("Proxy has been launched. Listening...")
 
     def setClientServerData(self):
@@ -190,7 +201,9 @@ if __name__ == "__main__":
     window.show()
 
     import qt5reactor
+
     qt5reactor.install()
 
     from twisted.internet import reactor
+
     sys.exit(reactor.run())
