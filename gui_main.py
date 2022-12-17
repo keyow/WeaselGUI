@@ -2,14 +2,17 @@
 
 import sys
 from gui_files.gui import *
-from gui_files import certificates_window
+# from gui_files import certificates_window
+from gui_files import ceritificates_select
 from PyQt5 import QtWidgets
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 import WeaselAPI.certgen
 from OpenSSL import crypto
 import twisted
 import logging
 import WeaselAPI
+import subprocess
 
 cur_client_ip = ""
 cur_client_port = 0
@@ -17,6 +20,7 @@ cur_server_ip = ""
 cur_server_port = 0
 ca_cer_raw = bytes()
 client_cer_raw = bytes()
+certificates_loaded = False
 
 
 class ProcessClientServer(QObject):
@@ -56,13 +60,82 @@ class ProcessConnectionTerminated(QObject):
                 self.terminated.emit()
             self.state = WeaselAPI.listening
 
+"""
+class ProcessSSHRequest(QObject):
+    def do_work(self):
+        while True:
+            QThread.sleep(1)
+            if WeaselAPI.ssh_requested:
+                ca_name = input("Enter CA certificate name: ")
+                subprocess.call(['sudo', 'scp', 'misc/certinfo/genCA_cert.pem',
+                                 f'first@192.168.10.131:/home/first/{ca_name}.crt'])
+                subprocess.call(
+                    ['ssh', "first@192.168.10.131", "sudo", "-S", "mv", f"/home/first/{ca_name}.crt",
+                     "/usr/local/share/ca-certificates/"])
+                subprocess.call(['ssh', "first@192.168.10.131", "update-ca-certificates"])
+                WeaselAPI.ssh_requested = False
+"""
 
-class CertificateSelect(QtWidgets.QDialog):
+
+class CertificatesSelect(QtWidgets.QDialog):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
         print(self.parent)
-        self.ui = certificates_window.Ui_Dialog()
+        self.ui = ceritificates_select.Ui_Dialog()
+        self.ui.setupUi(self)
+        self.CAfilepath = None
+        self.CLIENTfilepath = None
+        self.setupSignals()
+
+    def setupSignals(self):
+        self.ui.selectCA.clicked.connect(self.openCA)
+        self.ui.selectClient.clicked.connect(self.openClient)
+        self.ui.buttonBox.accepted.connect(self.saveCertificateEvent)
+        # self.ui.buttonBox.accepted.connect(lambda: self.parent.send("Certificates loaded successfully!"))
+
+    def openCA(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        self.CAfilepath, _ = QFileDialog.getOpenFileName(self, "Choose File", filter="*.pem *.cer", options=options)
+        self.ui.CAPath.setText(self.CAfilepath)
+        print(self.CAfilepath)
+
+    def openClient(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        self.CLIENTfilepath, _ = QFileDialog.getOpenFileName(self, "Choose File", filter="*.pem *.cer", options=options)
+        self.ui.ClientPath.setText(self.CLIENTfilepath)
+        print(self.CLIENTfilepath)
+
+    def saveCertificateEvent(self):
+        if self.CAfilepath is None or self.CLIENTfilepath is None:
+            QMessageBox.critical(self, "Error", "Got empty certificate")
+            return
+
+        global ca_cer_raw, client_cer_raw
+
+        with open(self.CAfilepath, 'rb') as f:
+            CA_CERT_PEM = crypto.load_certificate(crypto.FILETYPE_PEM, f.read())
+            ca_cer_raw = crypto.dump_certificate(crypto.FILETYPE_ASN1, CA_CERT_PEM)
+            print("CA loaded")
+
+        with open(self.CLIENTfilepath, 'rb') as f:
+            CLIENT_CERT_PEM = crypto.load_certificate(crypto.FILETYPE_PEM, f.read())
+            client_cer_raw = crypto.dump_certificate(crypto.FILETYPE_ASN1, CLIENT_CERT_PEM)
+            print("Client certificates loaded")
+
+        global certificates_loaded
+        certificates_loaded = True
+        self.parent.setStartActive()
+
+
+class CertificateGenerate(QtWidgets.QDialog):
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+        print(self.parent)
+        self.ui = ceritificates_select.Ui_Dialog()
         self.ui.setupUi(self)
         self.setupSignals()
 
@@ -107,7 +180,9 @@ class CertificateSelect(QtWidgets.QDialog):
         ca_cer_raw = crypto.dump_certificate(crypto.FILETYPE_ASN1, CA_CERT)
         client_cer_raw = crypto.dump_certificate(crypto.FILETYPE_ASN1, CLIENT_CERT)
 
-        self.parent.ui.startProxy.setEnabled(True)
+        global certificates_loaded
+        certificates_loaded = True
+        self.parent.setStartActive()
 
 
 class QPlainTextEditLoggerHandler(logging.Handler):
@@ -127,7 +202,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setFixedSize(650, 380)
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
-        self.dialog = CertificateSelect(parent=self)
+        self.dialog = CertificatesSelect(parent=self)
 
         self.processThread = QThread()
         self.worker = ProcessClientServer()
@@ -146,6 +221,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connectionThread.started.connect(self.connectionWorker.do_work)
         self.connectionThread.start()
 
+        """
+        self.SSHThread = QThread()
+        self.SSHWorker = ProcessSSHRequest()
+        self.SSHWorker.moveToThread(self.SSHThread)
+        self.SSHThread.started.connect(self.SSHWorker.do_work)
+        self.SSHThread.start()
+        """
+
         loggingBrowser = QPlainTextEditLoggerHandler(self.ui.LoggingBrowser)
         logging.getLogger().addHandler(loggingBrowser)
         logging.getLogger().setLevel(logging.DEBUG)
@@ -159,7 +242,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.loadCertificates.setEnabled(True)
 
     def setStartActive(self):
-        self.ui.startProxy.setEnabled(True)
+        if certificates_loaded:
+            self.ui.startProxy.setEnabled(True)
+        print("start not active")
 
     def setupSignals(self):
         self.ui.loadCertificates.clicked.connect(self.selectCertificates)

@@ -295,7 +295,11 @@ class TCPServerBridgeProto(TCP):
                       f" |\n |\n v\n"
                       f"Server (original):\n \tIP address: {self.factory.server_ip}\n \tPort: {self.factory.server_port}\n"
                       f"-----------------------------------\n")
-
+        # WeaselAPI.ssh_requested = True
+        """
+        while WeaselAPI.ssh_requested:
+            continue
+        """
         # Trying to connect to the target server
         self.connectToTargetServer()
 
